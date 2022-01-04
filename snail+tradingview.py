@@ -1,7 +1,6 @@
 """
-The Snail v 2.2
+The Snail v 2.3
 "Buy the dips! ... then wait"
-
 STRATEGY
 1. Selects coins that are X% (percent_below) below their X day (LIMIT) maximum
 2. ** NEW ** Finds movement (MOVEMENT) range over X Days
@@ -9,18 +8,18 @@ STRATEGY
 3. Check coins are not already owned
 4. Uses MACD to check if coins are currently on an uptrend
 5. Adds coins that pass all above tests to Signal file for the Bot to buy (ordered by Potential Profit from High to Low)
-
 * MOVEMENT
   Looks at the fluctuation in price over LIMIT days and compares to your TAKE_PROFIT settings.
   i.e. if your TAKE_PROFIT is 3%, but the movement is only 1%, then you wont hit TP and will be left holding the coin
   This can be turned off if you want.
-
 * ATR MOVEMENT
 calculates Average True Range Percent (ATRP) as an alternative to the default movement
-
 * DROP_CALCULATION
 Potential calculation as drop in % from high-price of X-day. Default 'False' to align with scoobie's version
-
+* RSI_RANKING
+RSI based ranking of coins already selected with MACD
+*TradingView - Sell Recommendation
+Won't buy the coin if TradingView recommends on selling it on 1m,5m,1hr,4h timeframes
 STRATEGY SETTINGS
 LIMIT = 4
 INTERVAL = '1d'
@@ -28,37 +27,29 @@ profit_min = 15
 profit_max = 100  # only required if you want to limit max profit
 percent_below = 0.6  # change risk level:  0.7 = 70% below high_price, 0.5 = 50% below high_price
 MOVEMENT = True #
-
 OTHER SETTINGS
 BVT or OLORIN Fork.
 Set True / False for compatibility
-
 WINDOWS (WINDOWS OS)
 Set True / False for compatibility
-
 DISCORD
 send message to Discord - Set True / False
-
-
 CONFIG.YML SETTINGS
 CHANGE_IN_PRICE: 100 REQUIRED
 Do NOT use pausebotmod as it will prevent the_snail from buying - The Snail buys the dips
-
 Developed by scoobie
 Thanks to
 @vyacheslav for optimising the code with async and adding list sorting,
 @Kevin.Butters for the meticulous testing and reporting,
 @OlorinSledge for the coding advice and a great fork
-
+v2.2, v2.3 by @ashwinprasad.me
 DISCLAIMER
 CHECK YOU HAVE ALL THE REQUIRED IMPORTS INSTALLED
 Developed for OlorinSledge fork - no support for any others as I don't use them.
 Troubleshooting and help - please use the #troubleshooting channel
 Settings - the settings in this file are what I currently use, please don't DM me for the 'best' settings - for me, these are the best so far.
 There's a lot of options to adjust the strategy, test them out and share your results in #bot-strategies so others can learn from them too
-
 Hope the Snail makes you rich!
-
 """
 
 import os
@@ -74,6 +65,7 @@ import pandas as pd
 import pandas_ta as ta
 import ccxt
 import requests
+from tradingview_ta import TA_Handler, Interval, Exchange
 
 # Load creds modules
 from helpers.handle_creds import (
@@ -136,10 +128,11 @@ percent_below = 0.6  # change risk level:  0.7 = 70% below high_price, 0.5 = 50%
 # movement can be either:
 #  "MOVEMENT" for original movement calc
 #  "ATR_MOVEMENT" for Average True Range Percentage calc
-MOVEMENT = 'MOVEMENT'
-DROP_CALCULATION = False
+MOVEMENT = 'ATR_MOVEMENT'
+DROP_CALCULATION = True
 
-WINDOWS = True
+# RSI based ranking of coins selected from MACD
+RSI_RANKING = True
 
 # Display Setttings
 all_info = True
@@ -161,15 +154,6 @@ class TextColors:
 	TCR = '\033[91m'
 	TCG = '\033[32m'
 	TCD = '\033[39m'
-
-def msg_discord(msg):
-
-	message = msg + '\n\n'
-
-	mUrl = "https://discordapp.com/api/webhooks/"+DISCORD_WEBHOOK
-	data = {"content": message}
-	response = requests.post(mUrl, json=data)
-
 
 def get_price(client_api):
 	initial_price = {}
@@ -253,7 +237,7 @@ def get_prices_high_low(list_coins, interval, limit):
 				h_p.append(high_price)
 				l_p.append(low_price)
 				atr.append(high_price-low_price)
-			prices_low_high[coin_symbol] = {'symbol': coin_symbol, 'high_price': h_p, 'low_price': l_p, 'current_potential': 0.0, 
+			prices_low_high[coin_symbol] = {'symbol': coin_symbol, 'high_price': h_p, 'low_price': l_p, 'current_potential': 0.0,
 											'atr_percentage': ((sum(atr)/len(atr)) / close_price) * 100}
 		except Exception as e:
 			print(f'Ignoring {coin_symbol} data issue')
@@ -326,13 +310,14 @@ def do_work():
 
 					if DROP_CALCULATION:
 						current_potential = current_drop
+						coins[coin]['current_potential'] = current_potential
 
 					if MOVEMENT == "MOVEMENT":
 						if profit_min < current_potential < profit_max and last_price < buy_below and movement >= (TAKE_PROFIT + 0.2) and coin not in held_coins_list:
 							current_potential_list.append(coins[coin])
 					elif MOVEMENT ==  "ATR_MOVEMENT":
 						if profit_min < current_potential < profit_max and last_price < buy_below and coins[coin]["atr_percentage"] >= (TAKE_PROFIT) and coin not in held_coins_list:
-							current_potential_list.append(coins[coin])						
+							current_potential_list.append(coins[coin])
 					else:
 						if profit_min < current_potential < profit_max and last_price < buy_below and coin not in held_coins_list:
 							current_potential_list.append(coins[coin])
@@ -370,13 +355,29 @@ def do_work():
 					macd5 = df5.ta.macd(fast=12, slow=26)
 					macd15 = df15.ta.macd(fast=12, slow=26)
 					macd1day = df1day.ta.macd(fast=12, slow=26)
+					macd4h = df4h.ta.macd(fast=12, slow=26)
 					macdbtc = dfbtc.ta.macd(fast=12, slow=26)
 
 					get_hist1 = macd1.iloc[35, 1]
 					get_hist5 = macd5.iloc[35, 1]
 					get_hist15 = macd15.iloc[35, 1]
+					get_hist4h = macd4h.iloc[35, 1]
+
+					if RSI_RANKING:
+						rsi = exchange.fetch_ohlcv(coin, timeframe='1h', limit=36)
+						dfrsi = pd.DataFrame(rsi, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+						rsi = ta.rsi(dfrsi["close"])
+						get_rsi = rsi.iloc[-1]
+						coins[coin]['rsi_14'] = get_rsi
+						coins[coin]['combined_rsi_cp_metric'] = ((100-coins[coin]['current_potential'])*.25) + (coins[coin]['rsi_14']*.75)
+
 					try:
 						get_hist1day = macd1day.iloc[35, 1]
+					except Exception as e:
+						print(f'{coin} Exception {e}')
+						continue
+					try:
+						get_hist4h = macd4h.iloc[35, 1]
 					except Exception as e:
 						print(f'{coin} Exception {e}')
 						continue
@@ -384,22 +385,105 @@ def do_work():
 
 
 					if all_info:
-						if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist1day >= 0 and get_histbtc >= 0:
-							print(f'MACD HIST {coin} {current_potential:.0f}% {TextColors.SELL_PROFIT}{get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist1day:.4f} {get_histbtc:.4f} ')
+						if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist4h >= 0 and get_histbtc >= 0:
+							print(f'MACD HIST {coin} {current_potential:.0f}% {TextColors.SELL_PROFIT}{get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist4h:.4f} {get_histbtc:.4f} ')
 						else:
-							print(f'MACD HIST {coin} {current_potential:.0f}% {get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist1day:.4f} {get_histbtc:.4f}')
+							print(f'MACD HIST {coin} {current_potential:.0f}% {get_hist1:.4f} {get_hist5:.4f} {get_hist15:.4f} {get_hist4h:.4f} {get_histbtc:.4f}')
 
-					if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist1day >= 0 and get_histbtc >= 0:
+					if get_hist1 >= 0 and get_hist5 >= 0 and get_hist15 >= 0 and get_hist4h >= 0 and get_histbtc >= 0:
 						# Add to coins for Snail to scan
 						print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}\n')
-						macd_list.append(coins[coin])
-					else:
-						print(f'Do NOT buy {coin}')
+
+						buy1m = TA_Handler(
+							symbol=coin,
+							screener='CRYPTO',
+							exchange='BINANCE',
+							interval=Interval.INTERVAL_1_MINUTE,
+							timeout=60
+						)
+						buy5m = TA_Handler(
+							symbol=coin,
+							screener='CRYPTO',
+							exchange='BINANCE',
+							interval=Interval.INTERVAL_5_MINUTES,
+							timeout=60
+						)
+						buy15m = TA_Handler(
+							symbol=coin,
+							screener='CRYPTO',
+							exchange='BINANCE',
+							interval=Interval.INTERVAL_15_MINUTES,
+							timeout=60
+						)
+						buy4h = TA_Handler(
+							symbol=coin,
+							screener='CRYPTO',
+							exchange='BINANCE',
+							interval=Interval.INTERVAL_4_HOURS,
+							timeout=60
+						)
+						try:
+							buyrecomm1m = buy1m.get_analysis().summary['RECOMMENDATION']
+							print(f'{coin} {buyrecomm1m} - 1m')
+						except Exception:
+							print("Error - 1m")
+							buyrecomm1m = "Error"
+
+						try:
+							buyrecomm5m = buy5m.get_analysis().summary['RECOMMENDATION']
+							print(f'{coin} {buyrecomm5m} - 5m')
+						except Exception as e:
+							print("Error - 5m")
+							buyrecomm5m = "Error"
+
+						try:
+							buyrecomm15m = buy15m.get_analysis().summary['RECOMMENDATION']
+							print(f'{coin} {buyrecomm15m} - 15m')
+						except Exception as e:
+							print("Error - 15m")
+							buyrecomm15m = "Error"
+
+						try:
+							buyrecomm4h = buy4h.get_analysis().summary['RECOMMENDATION']
+							print(f'{coin} {buyrecomm4h} - 4h')
+						except Exception as e:
+							print("Error - 4h")
+							buyrecomm4h = "Error"
+
+						buynow = True
+
+						if (buyrecomm1m == "SELL") or (buyrecomm1m == "STRONG_SELL"):
+							buynow = False
+							print(f'{coin} 1m TF failed')
+
+						if (buyrecomm5m == "SELL") or (buyrecomm5m == "STRONG_SELL"):
+							buynow = False
+							print(f'{coin} 5m TF failed')
+
+						if (buyrecomm15m == "SELL") or (buyrecomm15m == "STRONG_SELL"):
+							buynow = False
+							print(f'{coin} 15m TF failed')
+
+						if (buyrecomm4h == "SELL") or (buyrecomm4h == "STRONG_SELL"):
+							buynow = False
+							print(f'{coin} 4h TF failed')
+
+						if buynow == True:
+							print(f'Buy signal detected on {coin}')
+							macd_list.append(coins[coin])
+							buynow = True
+						else:
+							print(f'TradeView doesnt recommend buying {coin}')
+							buynow = True
 
 				if macd_list:
 
 					# print(macd_list)
-					sort_list = sorted(macd_list, key=lambda x: x[f'current_potential'], reverse=True)
+					if RSI_RANKING:
+						sort_list = sorted(macd_list, key=lambda x: x[f'combined_rsi_cp_metric'])
+					else:
+						sort_list = sorted(macd_list, key=lambda x: x[f'current_potential'], reverse=True)
+
 					for i in sort_list:
 						coin = i['symbol']
 						current_potential = i['current_potential']
@@ -430,20 +514,19 @@ def do_work():
 								  # f'Max Profit {max_potential:.2f}%\n'
 								  # f'Min Profit {min_potential:.2f}%\n'
 								  )
-						print(f'Adding {TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} to buy list')
+						# print(f'Adding {TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} to buy list')
 
 						# add to signal
 						with open(f'signals/snail_scan{signal_file_type}', 'a+') as f:
 							f.write(str(coin) + '\n')
 
-				else:
-					print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} may not be profitable at this time')
-					
+				# else:
+				# print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} may not be profitable at this time')
 				snail_coins = len(current_potential_list)
 				macd_coins = len(macd_list)
 				snail_discord = f'Snail found {snail_coins} coins and MACD approved {macd_coins}'
-				if DISCORD:
-					msg_discord(snail_discord)
+				#if DISCORD:
+				#	msg_discord(snail_discord)
 				print(f'{TextColors.TURQUOISE}Snail found {snail_coins} coins and MACD approved {macd_coins} coins. L: {LIMIT}days Min: {profit_min}% Risk: {percent_below * 100}% {TextColors.DEFAULT}')
 			time.sleep(180)
 		except Exception as e:
@@ -454,5 +537,5 @@ def do_work():
 			continue
 
 if __name__ == '__main__':
-	# Testing 
+	# Testing
 	do_work()
