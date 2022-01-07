@@ -125,7 +125,7 @@ else:
 	signal_file_type = '.exs'
 
 # send message to discord
-DISCORD = False
+DISCORD = True
 
 # Strategy Settings
 LIMIT = 4
@@ -142,7 +142,7 @@ DROP_CALCULATION = False
 WINDOWS = True
 
 # Display Setttings
-all_info = True
+all_info = False
 block_info = False
 
 
@@ -304,7 +304,7 @@ def do_work():
 					coins[coin]['current_potential'] = current_potential
 					current_drop = (100 * (high_price-last_price)) / high_price
 					movement = (low_price / range)
-					print(f'{coin} CP:{current_potential:.2f}% CD:{current_drop:.2f}%  M:{movement:.2f}% ATRP:{coins[coin]["atr_percentage"]:.2f}%')
+					#print(f'{coin} CP:{current_potential:.2f}% CD:{current_drop:.2f}%  M:{movement:.2f}% ATRP:{coins[coin]["atr_percentage"]:.2f}%')
 
 					if block_info:
 						print(f'\nPrice:            ${last_price:.3f}\n'
@@ -393,8 +393,8 @@ def do_work():
 						# Add to coins for Snail to scan
 						print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} Potential profit: {TextColors.TURQUOISE}{current_potential:.0f}%{TextColors.DEFAULT}\n')
 						macd_list.append(coins[coin])
-					else:
-						print(f'Do NOT buy {coin}')
+					#else:
+					#	print(f'Do NOT buy {coin}')
 
 				if macd_list:
 
@@ -436,8 +436,8 @@ def do_work():
 						with open(f'signals/snail_scan{signal_file_type}', 'a+') as f:
 							f.write(str(coin) + '\n')
 
-				else:
-					print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} may not be profitable at this time')
+				#else:
+				#	print(f'{TextColors.TURQUOISE}{coin}{TextColors.DEFAULT} may not be profitable at this time')
 					
 				snail_coins = len(current_potential_list)
 				macd_coins = len(macd_list)
